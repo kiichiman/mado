@@ -1,4 +1,11 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="窓清掃 進捗表">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>窓清掃 進捗表</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
@@ -578,10 +585,74 @@ input[type="time"] {
   }
 }
 
+.row-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-target {
+  color: var(--fg-sub);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.row-target.is-over {
+  color: var(--danger);
+}
+
+#statDiff.is-ok {
+  color: var(--done);
+}
+
+#statDiff.is-over {
+  color: var(--danger);
+}
+
+.plan-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.plan-day {
+  font-size: 12px;
+  color: var(--fg-sub);
+  min-width: 40px;
+}
+
+.plan-sep {
+  color: var(--fg-sub);
+}
+
+.plan-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 14px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.field-est input {
+  width: 90px;
+}
+
 [hidden] {
   display: none !important;
 }
 </style>
+</head>
+<body>
 <header class="head">
   <div class="head-inner">
     <div class="head-top">
@@ -605,11 +676,12 @@ input[type="time"] {
     </div>
 
     <dl class="stats">
-      <div class="stat"><dt>今日の開始</dt><dd class="num" id="statStart">—</dd></div>
-      <div class="stat"><dt>経過時間</dt><dd class="num" id="statElapsed">—</dd></div>
-      <div class="stat"><dt>1枠の平均</dt><dd class="num" id="statAvg">—</dd></div>
+      <div class="stat"><dt>今日の予定</dt><dd class="num" id="statPlan">—</dd></div>
+      <div class="stat"><dt>1枠の目安</dt><dd class="num" id="statEven">—</dd></div>
       <div class="stat"><dt>終了見込み</dt><dd class="num" id="statEta">—</dd></div>
+      <div class="stat"><dt>予定との差</dt><dd class="num" id="statDiff">—</dd></div>
     </dl>
+    <p class="warn" id="planWarn" hidden>目安の合計が作業予定の時間を超えています</p>
   </div>
 </header>
 
@@ -624,6 +696,14 @@ input[type="time"] {
     <div class="field">
       <label for="editEstimateNo">見積番号</label>
       <input type="text" id="editEstimateNo" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>作業日の予定</label>
+      <div id="planList"></div>
+    </div>
+    <div class="row-actions">
+      <button type="button" id="addDayBtn" class="btn ghost">作業日を追加</button>
+      <button type="button" id="delDayBtn" class="mini danger">最後の作業日を削除</button>
     </div>
 
     <h2>品目の編集</h2>
@@ -643,6 +723,10 @@ input[type="time"] {
       <div class="field">
         <label for="addUnit">単位</label>
         <input type="text" id="addUnit" value="枠" autocomplete="off">
+      </div>
+      <div class="field field-est">
+        <label for="addEst">目安（分）</label>
+        <input type="number" id="addEst" min="1" step="1" inputmode="numeric" placeholder="空欄可">
       </div>
     </div>
     <button type="button" class="btn ghost" id="addItemBtn">品目を追加</button>
@@ -684,10 +768,177 @@ input[type="time"] {
       { id: "i5", name: "窓サッシ出窓", qty: 1, unit: "枠" }
     ],
     days: [],
-    cells: {}
+    cells: {},
+    plan: [
+      { start: "09:00", end: "17:00" },
+      { start: "09:00", end: "17:00" }
+    ]
   };
 
   var state = null;
+
+  function defaultPlan() {
+    return [
+      { start: "09:00", end: "17:00" },
+      { start: "09:00", end: "17:00" }
+    ];
+  }
+
+  function isTimeStr(v) {
+    return typeof v === "string" && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+  }
+
+  function planMinutes(day) {
+    if (!day || !isTimeStr(day.start) || !isTimeStr(day.end)) return 0;
+    var s = Number(day.start.slice(0, 2)) * 60 + Number(day.start.slice(3, 5));
+    var e = Number(day.end.slice(0, 2)) * 60 + Number(day.end.slice(3, 5));
+    var d = e - s;
+    return d > 0 ? d : 0;
+  }
+
+  function planTotal() {
+    var t = 0;
+    for (var i = 0; i < state.plan.length; i++) t += planMinutes(state.plan[i]);
+    return t;
+  }
+
+  function curDayIndex() {
+    if (state.days.length > 0) {
+      var last = new Date(state.days[state.days.length - 1].start);
+      if (isSameDay(last, new Date())) return state.days.length - 1;
+    }
+    return state.days.length;
+  }
+
+  function itemsWithEstSum() {
+    var sum = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      if (typeof it.estMin === "number" && it.estMin > 0) {
+        sum += it.estMin * Math.max(1, Math.floor(it.qty) || 1);
+      }
+    }
+    return sum;
+  }
+
+  function unsetQtySum() {
+    var sum = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      if (!(typeof it.estMin === "number" && it.estMin > 0)) {
+        sum += Math.max(1, Math.floor(it.qty) || 1);
+      }
+    }
+    return sum;
+  }
+
+  function evenMin() {
+    var unset = unsetQtySum();
+    if (unset <= 0) return null;
+    var num = planTotal() - itemsWithEstSum();
+    if (num <= 0) return 0;
+    return num / unset;
+  }
+
+  function targetMin(item) {
+    if (typeof item.estMin === "number" && item.estMin > 0) return item.estMin;
+    var e = evenMin();
+    return e === null ? 0 : e;
+  }
+
+  function paceFactor() {
+    var sumDur = 0;
+    var sumTarget = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      for (var k = 0; k < it.qty; k++) {
+        var c = getCell(it.id, k);
+        if (!c || !c.doneAt) continue;
+        var d = durationMinutes(it.id, k);
+        if (d === null) continue;
+        sumDur += d;
+        sumTarget += targetMin(it);
+      }
+    }
+    if (sumTarget <= 0) return 1;
+    return sumDur / sumTarget;
+  }
+
+  function remainWork() {
+    var pace = paceFactor();
+    var w = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      for (var k = 0; k < it.qty; k++) {
+        var c = getCell(it.id, k);
+        if (c && c.doneAt) continue;
+        w += targetMin(it) * pace;
+      }
+    }
+    return w;
+  }
+
+  function scheduleFrom(workMin) {
+    var now = new Date();
+    var cur = curDayIndex();
+    var plan = state.plan;
+
+    if (cur >= plan.length) {
+      var pd = plan.length > 0 ? plan[plan.length - 1] : { start: "09:00", end: "17:00" };
+      var base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      var st = new Date(base.getFullYear(), base.getMonth(), base.getDate(), Number(pd.start.slice(0, 2)), Number(pd.start.slice(3, 5)));
+      var startAt = now.getTime() > st.getTime() ? now : st;
+      var lastIdx = Math.max(0, plan.length - 1);
+      return { dayIndex: lastIdx, time: startAt, overMin: Math.ceil(workMin - 0.001) };
+    }
+
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var curPlan = plan[cur] || { start: "09:00", end: "17:00" };
+
+    var curStart;
+    if (state.days.length > cur && state.days[cur]) {
+      curStart = new Date(state.days[cur].start);
+    } else {
+      curStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), Number(curPlan.start.slice(0, 2)), Number(curPlan.start.slice(3, 5)));
+    }
+    var curEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), Number(curPlan.end.slice(0, 2)), Number(curPlan.end.slice(3, 5)));
+
+    var begin = now.getTime() > curStart.getTime() ? now : curStart;
+
+    if (workMin <= 0) {
+      return { dayIndex: cur, time: begin, overMin: 0 };
+    }
+
+    var remainMs = curEnd.getTime() - begin.getTime();
+    var remain = remainMs > 0 ? remainMs / 60000 : 0;
+
+    if (workMin <= remain) {
+      return { dayIndex: cur, time: new Date(begin.getTime() + workMin * 60000), overMin: 0 };
+    }
+
+    var left = workMin - remain;
+
+    for (var d = cur + 1; d < plan.length; d++) {
+      var dayMin = planMinutes(plan[d]);
+      if (left <= dayMin) {
+        var dayBase = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        dayBase.setDate(dayBase.getDate() + (d - cur));
+        var s2 = new Date(dayBase.getFullYear(), dayBase.getMonth(), dayBase.getDate(), Number(plan[d].start.slice(0, 2)), Number(plan[d].start.slice(3, 5)));
+        return { dayIndex: d, time: new Date(s2.getTime() + left * 60000), overMin: 0 };
+      }
+      left -= dayMin;
+    }
+
+    var last = plan.length - 1;
+    var lb = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    lb.setDate(lb.getDate() + (last - cur));
+    var lEnd = new Date(lb.getFullYear(), lb.getMonth(), lb.getDate(), Number(plan[last].end.slice(0, 2)), Number(plan[last].end.slice(3, 5)));
+    return { dayIndex: last, time: lEnd, overMin: Math.ceil(left - 0.001) };
+  }
+
+  function fmtSchedule(res) {
+    return (res.dayIndex + 1) + "日目 " + hhmm(res.time);
+  }
   var editing = false;
   var confirmTimers = new WeakMap();
   var confirmHandlers = new WeakMap();
@@ -829,19 +1080,34 @@ input[type="time"] {
         estimateNo: typeof parsed.estimateNo === "string" ? parsed.estimateNo : INITIAL.estimateNo,
         items: [],
         days: [],
-        cells: {}
+        cells: {},
+        plan: defaultPlan()
       };
       if (Array.isArray(parsed.items)) {
         for (var i = 0; i < parsed.items.length; i++) {
           var it = parsed.items[i];
           if (!it || typeof it !== "object") continue;
+          var estMin = Number(it.estMin);
           s.items.push({
             id: typeof it.id === "string" ? it.id : "i" + i,
             name: typeof it.name === "string" ? it.name : "",
             qty: Math.max(1, Math.floor(Number(it.qty)) || 1),
-            unit: typeof it.unit === "string" ? it.unit : "枠"
+            unit: typeof it.unit === "string" ? it.unit : "枠",
+            estMin: (typeof it.estMin === "number" && it.estMin > 0) ? it.estMin : (it.estMin !== null && it.estMin !== undefined && it.estMin !== "" && estMin > 0 ? estMin : null)
           });
         }
+      }
+      if (Array.isArray(parsed.plan) && parsed.plan.length > 0) {
+        var plan = [];
+        for (var p = 0; p < parsed.plan.length; p++) {
+          var pd = parsed.plan[p];
+          if (!pd || typeof pd !== "object") continue;
+          plan.push({
+            start: isTimeStr(pd.start) ? pd.start : "09:00",
+            end: isTimeStr(pd.end) ? pd.end : "17:00"
+          });
+        }
+        if (plan.length > 0) s.plan = plan;
       }
       if (Array.isArray(parsed.days)) {
         for (var j = 0; j < parsed.days.length; j++) {
@@ -905,6 +1171,13 @@ input[type="time"] {
 
   function cacheEls() {
     el.siteName = document.getElementById("siteName");
+    el.statPlan = document.getElementById("statPlan");
+    el.statEven = document.getElementById("statEven");
+    el.statEta = document.getElementById("statEta");
+    el.statDiff = document.getElementById("statDiff");
+    el.planWarn = document.getElementById("planWarn");
+    el.planList = document.getElementById("planList");
+    el.addEst = document.getElementById("addEst");
     el.estimateNo = document.getElementById("estimateNo");
     el.remainCount = document.getElementById("remainCount");
     el.doneCount = document.getElementById("doneCount");
@@ -912,9 +1185,9 @@ input[type="time"] {
     el.progressBar = document.getElementById("progressBar");
     el.progressFill = document.getElementById("progressFill");
     el.progressLabel = document.getElementById("progressLabel");
-    el.statStart = document.getElementById("statStart");
-    el.statElapsed = document.getElementById("statElapsed");
-    el.statAvg = document.getElementById("statAvg");
+
+
+
     el.statEta = document.getElementById("statEta");
     el.dayList = document.getElementById("dayList");
     el.startDayBtn = document.getElementById("startDayBtn");
@@ -953,43 +1226,91 @@ input[type="time"] {
     el.progressBar.setAttribute("aria-valuenow", String(pct));
   }
 
+  function bindPlanButtons() {
+    var addBtn = document.getElementById("addDayBtn");
+    var delBtn = document.getElementById("delDayBtn");
+
+    addBtn.addEventListener("click", function () {
+      var last = state.plan[state.plan.length - 1] || { start: "09:00", end: "17:00" };
+      state.plan.push({ start: last.start, end: last.end });
+      save();
+      renderEditPanel();
+      renderStats();
+      renderGroups();
+    });
+
+    armConfirm(delBtn, {
+      idle: "最後の作業日を削除",
+      armed: "もう一度で削除"
+    }, function () {
+      if (state.plan.length <= 1) return;
+      state.plan.pop();
+      save();
+      renderEditPanel();
+      renderStats();
+      renderGroups();
+    });
+
+  }
+
   function renderStats() {
     var now = new Date();
-    var start = todayStartDate();
-    var startIsToday = start !== null && isSameDay(start, now);
+    var cur = curDayIndex();
+    var plan = state.plan;
 
-    if (startIsToday) {
-      el.statStart.textContent = hhmmPad(start);
-      var elapsedMs = now.getTime() - start.getTime();
-      if (elapsedMs < 0) elapsedMs = 0;
-      var elMin = Math.floor(elapsedMs / 60000);
-      el.statElapsed.textContent = Math.floor(elMin / 60) + "時間" + (elMin % 60) + "分";
-    } else {
-      el.statStart.textContent = "—";
-      el.statElapsed.textContent = "—";
+    el.statPlan.textContent = "—";
+    if (cur < plan.length && plan[cur]) {
+      var pd = plan[cur];
+      var planStart = pd.start;
+      if (state.days.length > cur && state.days[cur]) {
+        planStart = hhmmPad(new Date(state.days[cur].start));
+      }
+      el.statPlan.textContent = planStart + "〜" + pd.end;
     }
 
-    var durs = validDurations();
-    var avg = null;
-    if (durs.length > 0) {
-      var sum = 0;
-      for (var i = 0; i < durs.length; i++) sum += durs[i];
-      avg = sum / durs.length;
+    var e = evenMin();
+    var pace = paceFactor();
+    var evenText = e === null ? "—" : Math.round(e) + "分";
+    if (e !== null && Math.abs(pace - 1) > 0.05) {
+      evenText += "（実績 ×" + pace.toFixed(1) + "）";
+    }
+    el.statEven.textContent = evenText;
+
+    var total = totalCount();
+    var done = doneCount();
+    var remain = Math.max(0, total - done);
+
+    if (remain === 0) {
+      el.statEta.textContent = "完了";
+      el.statDiff.textContent = "完了";
+      el.statDiff.classList.remove("is-ok");
+      el.statDiff.classList.remove("is-over");
+    } else {
+      var res = scheduleFrom(remainWork());
+      var etaText = fmtSchedule(res);
+      if (res.overMin > 0) etaText += "＋";
+      el.statEta.textContent = etaText;
+
+      if (res.overMin > 0) {
+        el.statDiff.textContent = res.overMin + "分 不足";
+        el.statDiff.classList.remove("is-ok");
+        el.statDiff.classList.add("is-over");
+      } else {
+        var lastIdx = plan.length - 1;
+        var base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        base.setDate(base.getDate() + (lastIdx - cur));
+        var lastEnd = new Date(base.getFullYear(), base.getMonth(), base.getDate(), Number(plan[lastIdx].end.slice(0, 2)), Number(plan[lastIdx].end.slice(3, 5)));
+        var slack = Math.floor((lastEnd.getTime() - res.time.getTime()) / 60000);
+        el.statDiff.textContent = slack + "分 余裕";
+        el.statDiff.classList.add("is-ok");
+        el.statDiff.classList.remove("is-over");
+      }
     }
 
-    if (avg === null) {
-      el.statAvg.textContent = "—";
-      el.statEta.textContent = "—";
+    if (e !== null && e <= 0) {
+      el.planWarn.hidden = false;
     } else {
-      var avgMin = Math.round(avg);
-      el.statAvg.textContent = avgMin + "分";
-
-      var total = totalCount();
-      var done = doneCount();
-      var remain = Math.max(0, total - done);
-      var etaMs = now.getTime() + remain * avg * 60000;
-      var eta = new Date(etaMs);
-      el.statEta.textContent = hhmmPad(eta);
+      el.planWarn.hidden = true;
     }
   }
 
@@ -1032,6 +1353,16 @@ input[type="time"] {
     } else {
       el.startDayBtn.className = "btn";
       el.dayList.hidden = false;
+    }
+    updateStartBtn();
+  }
+
+  function updateStartBtn() {
+    var lastDay = state.days[state.days.length - 1];
+    if (lastDay && isSameDay(new Date(lastDay.start), new Date())) {
+      el.startDayBtn.hidden = true;
+    } else {
+      el.startDayBtn.hidden = false;
     }
   }
 
@@ -1081,6 +1412,19 @@ input[type="time"] {
   function renderGroups() {
     el.groups.textContent = "";
 
+    var pace = paceFactor();
+    var rowTargets = {};
+    var acc = 0;
+    for (var ti = 0; ti < state.items.length; ti++) {
+      var tItem = state.items[ti];
+      for (var tk = 0; tk < tItem.qty; tk++) {
+        var tCell = getCell(tItem.id, tk);
+        if (tCell && tCell.doneAt) continue;
+        acc += targetMin(tItem) * pace;
+        rowTargets[cellKey(tItem.id, tk)] = scheduleFrom(acc);
+      }
+    }
+
     for (var i = 0; i < state.items.length; i++) {
       (function (item) {
         var group = document.createElement("section");
@@ -1108,7 +1452,7 @@ input[type="time"] {
         group.appendChild(head);
 
         for (var k = 0; k < item.qty; k++) {
-          group.appendChild(buildRow(item, k));
+          group.appendChild(buildRow(item, k, rowTargets[cellKey(item.id, k)]));
         }
 
         el.groups.appendChild(group);
@@ -1116,7 +1460,7 @@ input[type="time"] {
     }
   }
 
-  function buildRow(item, index) {
+  function buildRow(item, index, rowTarget) {
     var cell = getCell(item.id, index);
     var row = document.createElement("div");
     row.className = "row" + (cell.doneAt ? " is-done" : "");
@@ -1124,10 +1468,26 @@ input[type="time"] {
     var main = document.createElement("div");
     main.className = "row-main";
 
+    var labelWrap = document.createElement("span");
+    labelWrap.className = "row-label-wrap";
     var label = document.createElement("span");
     label.className = "row-label num";
     label.textContent = (index + 1) + "/" + item.qty;
-    main.appendChild(label);
+    labelWrap.appendChild(label);
+    if (!cell || !cell.doneAt) {
+      var tgt = document.createElement("span");
+      tgt.className = "row-target";
+      if (rowTarget && rowTarget.overMin > 0) {
+        tgt.textContent = "目安 予定超過";
+        tgt.classList.add("is-over");
+      } else if (rowTarget) {
+        tgt.textContent = "目安 " + fmtSchedule(rowTarget);
+      } else {
+        tgt.textContent = "目安 —";
+      }
+      labelWrap.appendChild(tgt);
+    }
+    main.appendChild(labelWrap);
 
     if (cell.doneAt) {
       var d = new Date(cell.doneAt);
@@ -1225,8 +1585,64 @@ input[type="time"] {
     el.editSiteName.value = state.siteName;
     el.editEstimateNo.value = state.estimateNo;
 
+    renderPlanList();
     renderEditItems();
     el.editWarn.hidden = true;
+  }
+
+  function renderPlanList() {
+    el.planList.textContent = "";
+    for (var i = 0; i < state.plan.length; i++) {
+      (function (idx) {
+        var row = document.createElement("div");
+        row.className = "plan-row";
+
+        var lab = document.createElement("span");
+        lab.className = "plan-day";
+        lab.textContent = (idx + 1) + "日目";
+        row.appendChild(lab);
+
+        var sIn = document.createElement("input");
+        sIn.type = "time";
+        sIn.className = "plan-input num";
+        sIn.value = state.plan[idx].start;
+        sIn.addEventListener("change", function () {
+          if (isTimeStr(sIn.value)) {
+            state.plan[idx].start = sIn.value;
+            save();
+            renderStats();
+            renderGroups();
+          } else {
+            sIn.value = state.plan[idx].start;
+          }
+        });
+        row.appendChild(sIn);
+
+        var sep = document.createElement("span");
+        sep.className = "plan-sep";
+        sep.textContent = "〜";
+        row.appendChild(sep);
+
+        var eIn = document.createElement("input");
+        eIn.type = "time";
+        eIn.className = "plan-input num";
+        eIn.value = state.plan[idx].end;
+        eIn.addEventListener("change", function () {
+          if (isTimeStr(eIn.value)) {
+            state.plan[idx].end = eIn.value;
+            save();
+            renderStats();
+            renderGroups();
+          } else {
+            eIn.value = state.plan[idx].end;
+          }
+        });
+        row.appendChild(eIn);
+
+        el.planList.appendChild(row);
+      })(i);
+    }
+    document.getElementById("delDayBtn").disabled = state.plan.length <= 1;
   }
 
   function renderEditItems() {
@@ -1275,6 +1691,39 @@ input[type="time"] {
         qtyField.appendChild(qtyLabel);
         qtyField.appendChild(qtyInput);
         controls.appendChild(qtyField);
+
+        var estField = document.createElement("div");
+        estField.className = "field field-est";
+        var estLabel = document.createElement("label");
+        estLabel.textContent = "目安（分/1枠）";
+        var estInput = document.createElement("input");
+        estInput.type = "number";
+        estInput.min = "1";
+        estInput.step = "1";
+        estInput.inputMode = "numeric";
+        estInput.className = "num";
+        var ev = evenMin();
+        estInput.placeholder = ev === null ? "未設定" : "均等 " + Math.round(ev);
+        if (typeof item.estMin === "number" && item.estMin > 0) {
+          estInput.value = String(item.estMin);
+        }
+        estInput.addEventListener("change", function () {
+          var v = Number(estInput.value);
+          if (estInput.value.trim() === "") {
+            item.estMin = null;
+          } else if (v > 0) {
+            item.estMin = v;
+          } else {
+            item.estMin = null;
+          }
+          save();
+          renderStats();
+          renderGroups();
+          renderEditItems();
+        });
+        estField.appendChild(estLabel);
+        estField.appendChild(estInput);
+        controls.appendChild(estField);
 
         box.appendChild(controls);
 
@@ -1406,7 +1855,16 @@ input[type="time"] {
 
     var total = totalCount();
     var done = doneCount();
-    lines.push("完了 " + done + " / " + total + "（残り " + Math.max(0, total - done) + "）");
+    var remain = Math.max(0, total - done);
+    lines.push("完了 " + done + " / " + total + "（残り " + remain + "）");
+    if (remain > 0) {
+      var rp = scheduleFrom(remainWork());
+      if (rp.overMin > 0) {
+        lines.push("終了見込み 予定より" + rp.overMin + "分超過");
+      } else {
+        lines.push("終了見込み " + fmtSchedule(rp));
+      }
+    }
 
     for (var i = 0; i < state.items.length; i++) {
       var item = state.items[i];
@@ -1549,15 +2007,19 @@ input[type="time"] {
         showWarn("数量は1以上を入力してください。");
         return;
       }
+      var addEstVal = Number(el.addEst.value);
+      var addEstOk = el.addEst.value.trim() !== "" && addEstVal > 0;
       state.items.push({
         id: "i" + Date.now() + "-" + Math.floor(Math.random() * 1000),
         name: name,
         qty: qty,
-        unit: unit
+        unit: unit,
+        estMin: addEstOk ? addEstVal : null
       });
       el.addName.value = "";
       el.addQty.value = "1";
       el.addUnit.value = "枠";
+      el.addEst.value = "";
       el.editWarn.hidden = true;
       save();
       renderAll();
@@ -1571,17 +2033,20 @@ input[type="time"] {
       resetAll();
     });
 
+    bindPlanButtons();
     el.copyBtn.addEventListener("click", doCopy);
 
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") {
         renderStats();
+        updateStartBtn();
         requestWakeLock();
       }
     });
 
     window.setInterval(function () {
       renderStats();
+      updateStartBtn();
     }, 30000);
 
     try {
@@ -1601,5 +2066,5 @@ input[type="time"] {
   requestWakeLock();
 })();
 </script>
-
-</body></html>
+</body>
+</html>
