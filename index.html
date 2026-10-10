@@ -687,6 +687,13 @@ input[type="time"] {
 
 <main class="wrap">
   <section class="edit-panel" id="editPanel" hidden>
+    <h2>CleanBookから取り込む</h2>
+    <div class="field">
+      <label for="importText">コピーしたリンクを貼り付け</label>
+      <textarea id="importText" rows="3" autocomplete="off"></textarea>
+    </div>
+    <button type="button" class="btn ghost" id="importBtn">取り込む</button>
+    <p class="warn" id="importWarn" hidden></p>
     <h2>現場の編集</h2>
 
     <div class="field">
@@ -758,15 +765,9 @@ input[type="time"] {
   var STORAGE_KEY = "bdash-window-progress-v1";
 
   var INITIAL = {
-    siteName: "宝順一 様",
-    estimateNo: "20260928-009",
-    items: [
-      { id: "i1", name: "窓サッシ網戸", qty: 3, unit: "枠" },
-      { id: "i2", name: "窓サッシ小窓セット", qty: 4, unit: "セット" },
-      { id: "i3", name: "玄関窓サッシ", qty: 1, unit: "枠" },
-      { id: "i4", name: "窓サッシ網戸（小）", qty: 5, unit: "枠" },
-      { id: "i5", name: "窓サッシ出窓", qty: 1, unit: "枠" }
-    ],
+    siteName: "",
+    estimateNo: "",
+    items: [],
     days: [],
     cells: {},
     plan: [
@@ -1206,11 +1207,14 @@ input[type="time"] {
     el.copyBtn = document.getElementById("copyBtn");
     el.copyFallback = document.getElementById("copyFallback");
     el.copyText = document.getElementById("copyText");
+    el.importText = document.getElementById("importText");
+    el.importBtn = document.getElementById("importBtn");
+    el.importWarn = document.getElementById("importWarn");
   }
 
   function renderHeader() {
-    el.siteName.textContent = state.siteName;
-    el.estimateNo.textContent = "見積番号 " + state.estimateNo;
+    el.siteName.textContent = state.siteName ? state.siteName : "現場未設定";
+    el.estimateNo.textContent = state.estimateNo ? "見積番号 " + state.estimateNo : "";
 
     var total = totalCount();
     var done = doneCount();
@@ -1280,7 +1284,12 @@ input[type="time"] {
     var done = doneCount();
     var remain = Math.max(0, total - done);
 
-    if (remain === 0) {
+    if (total === 0) {
+      el.statEta.textContent = "—";
+      el.statDiff.textContent = "—";
+      el.statDiff.classList.remove("is-ok");
+      el.statDiff.classList.remove("is-over");
+    } else if (remain === 0) {
       el.statEta.textContent = "完了";
       el.statDiff.textContent = "完了";
       el.statDiff.classList.remove("is-ok");
@@ -1411,6 +1420,14 @@ input[type="time"] {
 
   function renderGroups() {
     el.groups.textContent = "";
+
+    if (state.items.length === 0) {
+      var hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "品目がありません。CleanBookの「madoへ送る」でコピーしたリンクを、編集の「CleanBookから取り込む」に貼り付けてください。";
+      el.groups.appendChild(hint);
+      return;
+    }
 
     var pace = paceFactor();
     var rowTargets = {};
@@ -2034,7 +2051,21 @@ input[type="time"] {
     });
 
     bindPlanButtons();
+    window.addEventListener("hashchange", handleImportHash);
     el.copyBtn.addEventListener("click", doCopy);
+    el.importBtn.addEventListener("click", function () {
+      var res = parseImport(el.importText.value);
+      if (!res.ok) {
+        el.importWarn.textContent = res.error;
+        el.importWarn.hidden = false;
+        return;
+      }
+      el.importWarn.hidden = true;
+      if (confirmImport(res.data)) {
+        applyImport(res.data);
+        el.importText.value = "";
+      }
+    });
 
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") {
@@ -2057,13 +2088,105 @@ input[type="time"] {
     } catch (e) { /* ignore */ }
   }
 
+  function parseImport(text) {
+    try {
+      var s = String(text == null ? "" : text);
+      var code;
+      var idx = s.indexOf("import=");
+      if (idx >= 0) {
+        code = s.substring(idx + 7);
+      } else {
+        code = s.trim();
+      }
+      code = code.split("#")[0].split("&")[0].trim();
+      if (!code) return { ok: false, error: "コードがありません" };
+      var b64 = code.replace(/-/g, "+").replace(/_/g, "/");
+      while (b64.length % 4 !== 0) b64 += "=";
+      var bin = atob(b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var json = new TextDecoder("utf-8").decode(bytes);
+      var obj = JSON.parse(json);
+      if (!obj || obj.v !== 1) return { ok: false, error: "形式が違います" };
+      var siteName = obj.siteName == null ? "" : String(obj.siteName).trim();
+      if (siteName.length > 100) return { ok: false, error: "現場名が長すぎます" };
+      var estimateNo = obj.estimateNo == null ? "" : String(obj.estimateNo).trim();
+      if (estimateNo.length > 50) return { ok: false, error: "見積番号が長すぎます" };
+      if (!(obj.items instanceof Array)) return { ok: false, error: "品目がありません" };
+      if (obj.items.length < 1 || obj.items.length > 50) return { ok: false, error: "品目の件数が不正です" };
+      var items = [];
+      for (var j = 0; j < obj.items.length; j++) {
+        var it = obj.items[j];
+        if (!it) return { ok: false, error: "品目が不正です" };
+        var name = it.name == null ? "" : String(it.name).trim();
+        if (name.length < 1 || name.length > 100) return { ok: false, error: "品目名が不正です" };
+        var qty = it.qty;
+        if (typeof qty !== "number" || !isFinite(qty) || !Number.isInteger(qty) || qty < 1 || qty > 999) {
+          return { ok: false, error: "数量が不正です" };
+        }
+        var unit = it.unit == null ? "" : String(it.unit).trim();
+        if (unit.length > 10) return { ok: false, error: "単位が不正です" };
+        if (unit === "") unit = "枠";
+        items.push({ name: name, qty: qty, unit: unit });
+      }
+      return { ok: true, data: { siteName: siteName, estimateNo: estimateNo, items: items } };
+    } catch (e) {
+      return { ok: false, error: "読み取れませんでした" };
+    }
+  }
+
+  function confirmImport(data) {
+    var msg = data.siteName + "（見積番号 " + data.estimateNo + "）の品目" + data.items.length + "件を取り込みます。";
+    if (data.estimateNo === "") {
+      msg = data.siteName + "の品目" + data.items.length + "件を取り込みます。";
+    }
+    if (state.items.length >= 1) {
+      msg += "\n今の進捗表（" + state.siteName + "、完了" + doneCount() + "枠）は消えます。";
+    }
+    msg += "\nよろしいですか？";
+    return window.confirm(msg);
+  }
+
+  function applyImport(data) {
+    var items = [];
+    for (var i = 0; i < data.items.length; i++) {
+      var it = data.items[i];
+      items.push({ id: "i" + (i + 1), name: it.name, qty: it.qty, unit: it.unit, estMin: null });
+    }
+    state = {
+      siteName: data.siteName,
+      estimateNo: data.estimateNo,
+      items: items,
+      days: [],
+      cells: {},
+      plan: defaultPlan()
+    };
+    save();
+    renderAll();
+  }
+
   /* ---- start ---- */
   cacheEls();
   state = load();
   save();
   bind();
   renderAll();
+  handleImportHash();
   requestWakeLock();
+
+  function handleImportHash() {
+    var h = location.hash;
+    if (h.indexOf("#import=") !== 0) return;
+    history.replaceState(null, "", location.pathname + location.search);
+    var res = parseImport(h);
+    if (!res.ok) {
+      window.alert("取り込めませんでした：" + res.error);
+      return;
+    }
+    if (confirmImport(res.data)) {
+      applyImport(res.data);
+    }
+  }
 })();
 </script>
 </body>
