@@ -647,6 +647,30 @@ input[type="time"] {
   width: 90px;
 }
 
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mode-tabs button {
+  flex: 1;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-sub);
+  color: var(--fg);
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mode-tabs button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
 [hidden] {
   display: none !important;
 }
@@ -655,6 +679,10 @@ input[type="time"] {
 <body>
 <header class="head">
   <div class="head-inner">
+    <div class="mode-tabs" role="group" aria-label="進捗表の切り替え">
+      <button type="button" id="modeEstimate" aria-pressed="true">見積の現場</button>
+      <button type="button" id="modeVacant" aria-pressed="false">空室清掃</button>
+    </div>
     <div class="head-top">
       <div>
         <div class="site-name" id="siteName">宝順一 様</div>
@@ -687,22 +715,40 @@ input[type="time"] {
 
 <main class="wrap">
   <section class="edit-panel" id="editPanel" hidden>
-    <h2>CleanBookから取り込む</h2>
-    <div class="field">
-      <label for="importText">コピーしたリンクを貼り付け</label>
-      <textarea id="importText" rows="3" autocomplete="off"></textarea>
+    <div id="importBox">
+      <h2>CleanBookから取り込む</h2>
+      <div class="field">
+        <label for="importText">コピーしたリンクを貼り付け</label>
+        <textarea id="importText" rows="3" autocomplete="off"></textarea>
+      </div>
+      <button type="button" class="btn ghost" id="importBtn">取り込む</button>
+      <p class="warn" id="importWarn" hidden></p>
     </div>
-    <button type="button" class="btn ghost" id="importBtn">取り込む</button>
-    <p class="warn" id="importWarn" hidden></p>
     <h2>現場の編集</h2>
 
     <div class="field">
-      <label for="editSiteName">現場名</label>
+      <label for="editSiteName" id="labelSiteName">現場名</label>
       <input type="text" id="editSiteName" autocomplete="off">
     </div>
     <div class="field">
-      <label for="editEstimateNo">見積番号</label>
+      <label for="editEstimateNo" id="labelEstimateNo">見積番号</label>
       <input type="text" id="editEstimateNo" autocomplete="off">
+    </div>
+    <div class="field" id="airconField" hidden>
+      <label for="editAircon">エアコン（別料金）台数</label>
+      <select id="editAircon">
+        <option value="0">0台</option>
+        <option value="1">1台</option>
+        <option value="2">2台</option>
+        <option value="3">3台</option>
+        <option value="4">4台</option>
+        <option value="5">5台</option>
+        <option value="6">6台</option>
+        <option value="7">7台</option>
+        <option value="8">8台</option>
+        <option value="9">9台</option>
+        <option value="10">10台</option>
+      </select>
     </div>
     <div class="field">
       <label>作業日の予定</label>
@@ -763,6 +809,10 @@ input[type="time"] {
   "use strict";
 
   var STORAGE_KEY = "bdash-window-progress-v1";
+  var VACANT_STORAGE_KEY = "bdash-window-progress-vacant-v1";
+  var MODE_STORAGE_KEY = "bdash-window-progress-mode";
+
+  var mode = "estimate";
 
   var INITIAL = {
     siteName: "",
@@ -775,6 +825,101 @@ input[type="time"] {
       { start: "09:00", end: "17:00" }
     ]
   };
+
+  var VACANT_ITEM_NAMES = [
+    "床掃除機がけ",
+    "床拭き",
+    "玄関、ドア",
+    "靴棚",
+    "照明",
+    "建具",
+    "壁紙汚れ落とし",
+    "窓サッシ",
+    "トイレ清掃",
+    "キッチンシンク棚",
+    "換気扇",
+    "洗面台洗濯パン",
+    "お風呂",
+    "ベランダ清掃",
+    "ワックス施工"
+  ];
+
+  function initialFor(m) {
+    if (m === "vacant") {
+      var items = [];
+      for (var i = 0; i < VACANT_ITEM_NAMES.length; i++) {
+        items.push({
+          id: "v" + (i + 1),
+          name: VACANT_ITEM_NAMES[i],
+          qty: 1,
+          unit: "式",
+          estMin: null
+        });
+      }
+      return {
+        siteName: "",
+        estimateNo: "",
+        items: items,
+        days: [],
+        cells: {},
+        plan: defaultPlan()
+      };
+    }
+    return clone(INITIAL);
+  }
+
+  function storageKey() {
+    return mode === "vacant" ? VACANT_STORAGE_KEY : STORAGE_KEY;
+  }
+
+  function readMode() {
+    try {
+      var v = window.localStorage.getItem(MODE_STORAGE_KEY);
+      mode = v === "vacant" ? "vacant" : "estimate";
+    } catch (e) {
+      mode = "estimate";
+    }
+  }
+
+  function saveMode() {
+    try {
+      window.localStorage.setItem(MODE_STORAGE_KEY, mode);
+    } catch (e) {
+      /* storage unavailable */
+    }
+  }
+
+  function resetLabel() {
+    return mode === "vacant" ? "新しい部屋にする（全データ消去）" : "新しい現場にする（全データ消去）";
+  }
+
+  function applyResetBtn() {
+    if (!el.resetBtn) return;
+    el.resetBtn.textContent = resetLabel();
+    el.resetBtn.dataset.armed = "0";
+    armConfirm(el.resetBtn, {
+      idle: resetLabel(),
+      armed: "もう一度押すと全消去"
+    }, function () {
+      resetAll();
+    });
+  }
+
+  function renderModeTabs() {
+    el.modeEstimate.setAttribute("aria-pressed", mode === "estimate" ? "true" : "false");
+    el.modeVacant.setAttribute("aria-pressed", mode === "vacant" ? "true" : "false");
+  }
+
+  function switchMode(m) {
+    if (m === mode) return;
+    save();
+    mode = m;
+    saveMode();
+    state = load();
+    applyResetBtn();
+    renderModeTabs();
+    renderAll();
+  }
 
   var state = null;
 
@@ -1072,13 +1217,13 @@ input[type="time"] {
   /* ---- load / save ---- */
   function load() {
     try {
-      var raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return clone(INITIAL);
+      var raw = window.localStorage.getItem(storageKey());
+      if (!raw) return clone(initialFor(mode));
       var parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return clone(INITIAL);
+      if (!parsed || typeof parsed !== "object") return clone(initialFor(mode));
       var s = {
-        siteName: typeof parsed.siteName === "string" ? parsed.siteName : INITIAL.siteName,
-        estimateNo: typeof parsed.estimateNo === "string" ? parsed.estimateNo : INITIAL.estimateNo,
+        siteName: typeof parsed.siteName === "string" ? parsed.siteName : initialFor(mode).siteName,
+        estimateNo: typeof parsed.estimateNo === "string" ? parsed.estimateNo : initialFor(mode).estimateNo,
         items: [],
         days: [],
         cells: {},
@@ -1132,13 +1277,13 @@ input[type="time"] {
       }
       return s;
     } catch (e) {
-      return clone(INITIAL);
+      return clone(initialFor(mode));
     }
   }
 
   function save() {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      window.localStorage.setItem(storageKey(), JSON.stringify(state));
     } catch (e) {
       /* storage unavailable: keep running in memory */
     }
@@ -1210,11 +1355,23 @@ input[type="time"] {
     el.importText = document.getElementById("importText");
     el.importBtn = document.getElementById("importBtn");
     el.importWarn = document.getElementById("importWarn");
+    el.importBox = document.getElementById("importBox");
+    el.labelSiteName = document.getElementById("labelSiteName");
+    el.labelEstimateNo = document.getElementById("labelEstimateNo");
+    el.airconField = document.getElementById("airconField");
+    el.editAircon = document.getElementById("editAircon");
+    el.modeEstimate = document.getElementById("modeEstimate");
+    el.modeVacant = document.getElementById("modeVacant");
   }
 
   function renderHeader() {
-    el.siteName.textContent = state.siteName ? state.siteName : "現場未設定";
-    el.estimateNo.textContent = state.estimateNo ? "見積番号 " + state.estimateNo : "";
+    if (mode === "vacant") {
+      el.siteName.textContent = state.siteName ? state.siteName : "建物名未設定";
+      el.estimateNo.textContent = state.estimateNo ? "お部屋番号 " + state.estimateNo : "";
+    } else {
+      el.siteName.textContent = state.siteName ? state.siteName : "現場未設定";
+      el.estimateNo.textContent = state.estimateNo ? "見積番号 " + state.estimateNo : "";
+    }
 
     var total = totalCount();
     var done = doneCount();
@@ -1602,6 +1759,32 @@ input[type="time"] {
     el.editSiteName.value = state.siteName;
     el.editEstimateNo.value = state.estimateNo;
 
+    if (mode === "vacant") {
+      el.labelSiteName.textContent = "建物名";
+      el.labelEstimateNo.textContent = "お部屋番号";
+      el.importBox.hidden = true;
+      el.airconField.hidden = false;
+      var acItem = null;
+      for (var ai = 0; ai < state.items.length; ai++) {
+        if (state.items[ai].id === "vAC") { acItem = state.items[ai]; break; }
+      }
+      var acQty = acItem ? acItem.qty : 0;
+      if (acQty > 10 && el.editAircon.options.length <= acQty) {
+        for (var q = el.editAircon.options.length; q <= acQty; q++) {
+          var opt = document.createElement("option");
+          opt.value = String(q);
+          opt.textContent = q + "台";
+          el.editAircon.appendChild(opt);
+        }
+      }
+      el.editAircon.value = String(acQty);
+    } else {
+      el.labelSiteName.textContent = "現場名";
+      el.labelEstimateNo.textContent = "見積番号";
+      el.importBox.hidden = false;
+      el.airconField.hidden = true;
+    }
+
     renderPlanList();
     renderEditItems();
     el.editWarn.hidden = true;
@@ -1858,9 +2041,44 @@ input[type="time"] {
   }
 
   function resetAll() {
-    state = clone(INITIAL);
+    state = clone(initialFor(mode));
     save();
     renderAll();
+  }
+
+  function onAirconChange() {
+    if (mode !== "vacant") return;
+    var n = parseInt(el.editAircon.value, 10);
+    if (isNaN(n)) n = 0;
+    var acItem = null;
+    for (var ai = 0; ai < state.items.length; ai++) {
+      if (state.items[ai].id === "vAC") { acItem = state.items[ai]; break; }
+    }
+    if (n >= 1) {
+      if (!acItem) {
+        state.items.push({ id: "vAC", name: "エアコン（別料金）", qty: n, unit: "台", estMin: null });
+        save();
+        renderAll();
+      } else {
+        applyQty(acItem, el.editAircon);
+      }
+      return;
+    }
+    if (acItem) {
+      var hasDone = false;
+      for (var k in state.cells) {
+        if (state.cells[k] && k.indexOf("vAC#") === 0 && state.cells[k].doneAt) {
+          hasDone = true;
+          break;
+        }
+      }
+      if (hasDone) {
+        showWarn("完了済みのエアコンがあるため、0台にできません。");
+        el.editAircon.value = String(acItem.qty);
+        return;
+      }
+      removeItem("vAC");
+    }
   }
 
   /* ---- report text ---- */
@@ -1868,7 +2086,11 @@ input[type="time"] {
     var now = new Date();
     var lines = [];
     var dateStr = (now.getMonth() + 1) + "/" + now.getDate() + " " + hhmmPad(now);
-    lines.push(state.siteName + " 窓清掃 進捗（" + dateStr + "時点）");
+    if (mode === "vacant") {
+      lines.push((state.siteName ? state.siteName : "建物名未設定") + (state.estimateNo ? " " + state.estimateNo : "") + " 空室清掃 進捗（" + dateStr + "時点）");
+    } else {
+      lines.push(state.siteName + " 窓清掃 進捗（" + dateStr + "時点）");
+    }
 
     var total = totalCount();
     var done = doneCount();
@@ -2042,12 +2264,12 @@ input[type="time"] {
       renderAll();
     });
 
-    var resetLabels = {
-      idle: "新しい現場にする（全データ消去）",
-      armed: "もう一度押すと全消去"
-    };
-    armConfirm(el.resetBtn, resetLabels, function () {
-      resetAll();
+    el.editAircon.addEventListener("change", onAirconChange);
+    el.modeEstimate.addEventListener("click", function () {
+      switchMode("estimate");
+    });
+    el.modeVacant.addEventListener("click", function () {
+      switchMode("vacant");
     });
 
     bindPlanButtons();
@@ -2167,9 +2389,12 @@ input[type="time"] {
 
   /* ---- start ---- */
   cacheEls();
+  readMode();
   state = load();
   save();
   bind();
+  applyResetBtn();
+  renderModeTabs();
   renderAll();
   handleImportHash();
   requestWakeLock();
@@ -2182,6 +2407,9 @@ input[type="time"] {
     if (!res.ok) {
       window.alert("取り込めませんでした：" + res.error);
       return;
+    }
+    if (mode === "vacant") {
+      switchMode("estimate");
     }
     if (confirmImport(res.data)) {
       applyImport(res.data);
